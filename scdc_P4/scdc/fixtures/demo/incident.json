@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0",
+  "supplier_message": {
+    "received_at": "2026-10-20T10:15:00+08:00",
+    "channel": "whatsapp (simulated)",
+    "from_contact": "whatsapp:maju-rental (synthetic)",
+    "text": "Boss, sorry ya. Our chair delivery for tomorrow will be late. We can only send 20 chairs tomorrow, the remaining 20 chairs we deliver on Friday."
+  },
+  "form_input": {
+    "type": "supplier_delay",
+    "source": "form",
+    "supplier_id": "S-01",
+    "resource_id": "R-01",
+    "delivery_id": "DL-01",
+    "quantity_affected": 20,
+    "original_arrival_date": "2026-10-21",
+    "new_arrival_date": "2026-10-23",
+    "description": "Maju will deliver only 20 of 40 chairs on 21 Oct; remaining 20 on 23 Oct.",
+    "client_request_id": "demo-001"
+  },
+  "expected_normalized_incident": {
+    "schema_version": "1.0",
+    "id": "D-001",
+    "type": "supplier_delay",
+    "source": "message",
+    "supplier_id": "S-01",
+    "resource_id": "R-01",
+    "delivery_id": "DL-01",
+    "quantity_affected": 20,
+    "original_arrival_date": "2026-10-21",
+    "new_arrival_date": "2026-10-23",
+    "description": "Maju will deliver only 20 of 40 chairs on 21 Oct; remaining 20 on 23 Oct.",
+    "reported_at": "2026-10-20T10:15:00+08:00",
+    "unresolved_fields": []
+  }
+}
