@@ -1,0 +1,24 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  recovery:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: "scdc_P4 (1)/scdc/backend"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install pydantic pytest
+      - name: Run tests
+        run: python -m pytest -q
+      - name: Run demo scenario
+        run: python -m scdc.recovery.demo
