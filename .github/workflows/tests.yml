@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: "scdc_P4 (1)/scdc/backend"
+        working-directory: "scdc/scdc/backend"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
