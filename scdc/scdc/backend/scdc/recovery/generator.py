@@ -12,6 +12,8 @@ Templates, in output order:
   2. source_alternative_supplier one plan per recorded offer from another supplier
   3. combination                spare + offers that each arrive in time but are
                                 individually too small (only if no single source fits)
+  3b. partial + expedite        in-time stock is not enough even combined: take all of
+                                it and ask the disrupted supplier to rush only the rest
   4. reschedule_job             move one affected job whose commitments are all
                                 reschedulable to the first later day that has room
   5. contact_supplier           ask the disrupted supplier to expedite the delayed units
@@ -225,7 +227,8 @@ def _alternatives(state: BusinessState, incident: NormalizedIncident, pr: Recove
     return out
 
 
-def _combination(state: BusinessState, incident: NormalizedIncident, pr: RecoveryProblem) -> list[Candidate]:
+def _in_time_sources(state: BusinessState, incident: NormalizedIncident, pr: RecoveryProblem):
+    """Spare stock + confirmed offers that arrive before the need date, cheapest first."""
     in_time = [
         o
         for o in _alternative_offers(state, incident, pr)
@@ -234,17 +237,22 @@ def _combination(state: BusinessState, incident: NormalizedIncident, pr: Recover
         and state.today + timedelta(days=o.lead_time_days) < pr.need_by
     ]
     spare = state.spare_quantity(pr.resource_id)
-    if spare >= pr.shortfall or any(o.available_quantity >= pr.shortfall for o in in_time):
-        return []  # a single source already covers it
-
     sources: list[tuple[str, Any, int]] = []
     if spare:
         sources.append(("spare", None, spare))
     cheapest = sorted(in_time, key=lambda o: (o.unit_cost is None, o.unit_cost.amount if o.unit_cost else 0, o.id))
     sources += [("offer", o, o.available_quantity) for o in cheapest]
+    return sources
 
-    remaining, actions, assumptions, parts = pr.shortfall, [], [], []
+
+def _single_source_covers(sources, shortfall: int) -> bool:
+    return any(qty >= shortfall for _, _, qty in sources)
+
+
+def _take(state: BusinessState, pr: RecoveryProblem, sources, needed: int):
+    """Greedily take up to ``needed`` units. Returns (actions, assumptions, parts, taken)."""
     r = state.resource(pr.resource_id)
+    remaining, actions, assumptions, parts = needed, [], [], []
     for kind, offer, qty in sources:
         if remaining <= 0:
             break
@@ -263,11 +271,68 @@ def _combination(state: BusinessState, incident: NormalizedIncident, pr: Recover
         else:
             actions.append(_source_action(state, offer, take))
             parts.append(f"{take} from {state.supplier(offer.supplier_id).name}")
-    if remaining > 0 or len(actions) < 2:
+    return actions, assumptions, parts, needed - remaining
+
+
+def _combination(state: BusinessState, incident: NormalizedIncident, pr: RecoveryProblem) -> list[Candidate]:
+    sources = _in_time_sources(state, incident, pr)
+    if _single_source_covers(sources, pr.shortfall):
+        return []  # a single source already covers it
+    actions, assumptions, parts, taken = _take(state, pr, sources, pr.shortfall)
+    if taken < pr.shortfall or len(actions) < 2:
         return []
+    r = state.resource(pr.resource_id)
     return [
         Candidate(
             summary=f"Combine sources for {pr.shortfall} {_plural(r.unit, pr.shortfall)}: {', '.join(parts)}.",
+            actions=actions,
+            assumptions=assumptions,
+        )
+    ]
+
+
+def _partial_plus_expedite(
+    state: BusinessState, incident: NormalizedIncident, pr: RecoveryProblem
+) -> list[Candidate]:
+    """In-time stock cannot cover the gap: take all of it and ask the late supplier to rush only the rest."""
+    delayed = state.delayed_arrival
+    if delayed is None or delayed.resource_id != pr.resource_id or delayed.date < pr.need_by:
+        return []
+    requested = pr.need_by - timedelta(days=1)
+    if requested < state.today:
+        return []
+    sources = _in_time_sources(state, incident, pr)
+    if _single_source_covers(sources, pr.shortfall):
+        return []
+    actions, assumptions, parts, taken = _take(state, pr, sources, pr.shortfall)
+    rest = pr.shortfall - taken
+    if taken == 0 or rest <= 0 or rest > delayed.quantity:
+        return []  # nothing to combine, already covered, or asking for more than is late
+
+    supplier = state.supplier(incident.supplier_id)
+    r = state.resource(pr.resource_id)
+    unit = _plural(r.unit, rest)
+    actions.append(
+        (
+            ActionType.contact_supplier,
+            TargetEntity(entity_type=EntityType.supplier, entity_id=supplier.id),
+            {
+                "supplier_id": supplier.id,
+                "request": f"Deliver {rest} of the remaining {delayed.quantity} "
+                f"{_plural(r.unit, delayed.quantity)} by {_fmt(requested)}",
+                "requested_date": requested.isoformat(),
+                "resource_id": r.id,
+                "quantity": rest,
+            },
+        )
+    )
+    assumptions.append(
+        f"{supplier.id} can deliver {rest} of the remaining {delayed.quantity} "
+        f"{_plural(r.unit, delayed.quantity)} by {requested.isoformat()}."
+    )
+    return [
+        Candidate(
+            summary=f"Get {', '.join(parts)}, and ask {supplier.name} to deliver {rest} {unit} by {_fmt(requested)}.",
             actions=actions,
             assumptions=assumptions,
         )
@@ -374,6 +439,7 @@ def generate_candidates(
         candidates += _spare(state, pr)
         candidates += _alternatives(state, incident, pr)
         candidates += _combination(state, incident, pr)
+        candidates += _partial_plus_expedite(state, incident, pr)
         candidates += _reschedule(state, pr)
         candidates += _expedite(state, incident, pr)
 

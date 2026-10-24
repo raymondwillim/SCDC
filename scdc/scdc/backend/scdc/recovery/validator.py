@@ -202,6 +202,11 @@ def _use_spare(run: _Run, action: RecoveryAction, p: UseSpareInventory) -> None:
             f"(owned {r.owned_quantity}, on hand {r.on_hand_quantity}).",
             [p.resource_id],
         )
+        # Count only the spare units that really exist, so the quantity check
+        # reports the true gap instead of the promised one.
+        real = max(0, spare - (used - p.quantity))
+        if real:
+            run.state.arrivals.append(Arrival(p.resource_id, run.state.today, real, action.id, plan_added=True))
         return
     where = f" at {p.location}" if p.location else ""
     run.add(
@@ -237,6 +242,7 @@ def _source_alternative(run: _Run, action: RecoveryAction, p: SourceAlternativeS
 
     offers = run.state.offerings(p.supplier_id, p.resource_id)
     arrival_date = p.expected_arrival_date
+    arriving = p.quantity  # units simulated as arriving; capped by recorded availability below
     if not offers:
         run.add(
             CheckCode.SUPPLIER_AVAILABLE,
@@ -251,6 +257,8 @@ def _source_alternative(run: _Run, action: RecoveryAction, p: SourceAlternativeS
         run.offering_use[offer.id] += p.quantity
         promised = run.offering_use[offer.id]
         if offer.available_quantity is not None and promised > offer.available_quantity:
+            # The supplier can only send what it has left after earlier actions.
+            arriving = max(0, offer.available_quantity - (promised - p.quantity))
             run.add(
                 CheckCode.SUPPLIER_AVAILABLE,
                 FAIL,
@@ -298,9 +306,10 @@ def _source_alternative(run: _Run, action: RecoveryAction, p: SourceAlternativeS
                 [offer.id],
             )
 
-    run.state.arrivals.append(
-        Arrival(p.resource_id, arrival_date, p.quantity, action.id, plan_added=True, persistent=False)
-    )
+    if arriving:
+        run.state.arrivals.append(
+            Arrival(p.resource_id, arrival_date, arriving, action.id, plan_added=True, persistent=False)
+        )
 
 
 def _job_demand(run: _Run, action: RecoveryAction, job_id: str, resource_id: str):

@@ -9,7 +9,7 @@ generates recovery plans, validates them with deterministic rules, ranks them, a
 
 | Module | Owner | Folder | State |
 |---|---|---|---|
-| Recovery planning, validation, ranking | P4 | `backend/scdc/recovery/` | done, 32 tests |
+| Recovery planning, validation, ranking | P4 | `backend/scdc/recovery/` | done, 37 tests |
 | Impact analysis | P3 | `backend/scdc/impact/` | — |
 | Backend / API | P2 | `backend/scdc/api/` | — |
 | AI adapter | P5 | `backend/scdc/ai/` | — |

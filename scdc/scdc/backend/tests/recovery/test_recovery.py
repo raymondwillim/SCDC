@@ -356,3 +356,69 @@ def test_ai_failure_falls_back_to_rules(snapshot, incident, impact):
     result = plan_recovery(incident, snapshot, impact, suggester=Broken())
     assert len(result.plans) == 3
     assert any("failed" in w for w in result.warnings)
+
+
+# ============================================================================ other lateness amounts
+
+
+def _late(incident, impact, late: int):
+    """Same delivery, but ``late`` of the 40 chairs slip to 23 Oct."""
+    inc = incident.model_copy(update={"quantity_affected": late})
+    imp = impact.model_copy(deep=True)
+    s = imp.resource_shortfalls[0]
+    s.available = 30 + 40 - late
+    s.shortfall = max(0, 70 - s.available)
+    return inc, imp
+
+
+def test_only_five_chairs_late(snapshot, incident, impact):
+    inc, imp = _late(incident, impact, 5)
+    result = plan_recovery(inc, snapshot, imp)
+    best = result.recommended
+    assert best.actions[0].parameters == {
+        "supplier_id": "S-02", "resource_id": "R-01", "quantity": 5,
+        "order_date": "2026-10-20", "expected_arrival_date": "2026-10-21",
+    }
+    assert best.validation.status == FEASIBLE
+    assert best.estimated_cost.amount == Decimal("20.00")
+    qty = next(c for c in best.validation.checks if c.code.value == "QUANTITY_SUFFICIENT")
+    assert qty.detail.startswith("65 + 5 = 70 meets 70")
+    expedite = next(p for p in result.plans if p.actions[0].action_type.value == "contact_supplier")
+    assert "remaining 5 chairs" in expedite.summary
+
+
+def test_supplier_shortage_reports_true_chair_count(snapshot, incident, impact):
+    # 40 late: Cahaya has only 25, so "rent 40 from Cahaya" must count 25, not 40.
+    inc, imp = _late(incident, impact, 40)
+    v = validate_plan(plan(rent("S-02", 40)), snapshot, imp, inc)
+    assert v.status == INFEASIBLE
+    qty = next(c for c in v.checks if c.code.value == "QUANTITY_SUFFICIENT")
+    assert qty.result.value == "fail"
+    assert qty.detail.startswith("30 + 25 = 55 against 70") and "short 15" in qty.detail
+
+
+def test_missing_spare_stock_is_not_counted(make_snapshot, incident, impact):
+    snap = make_snapshot(lambda s: by_id(s["resources"], "R-01").update(owned_quantity=40))  # 10 spare
+    p = plan(action("use_spare_inventory", {"resource_id": "R-01", "quantity": 20}))
+    v = validate_plan(p, snap, impact, incident)
+    qty = next(c for c in v.checks if c.code.value == "QUANTITY_SUFFICIENT")
+    assert qty.detail.startswith("50 + 10 = 60") and "short 10" in qty.detail
+
+
+def test_partial_supply_plus_expedite_when_nobody_has_enough(snapshot, incident, impact):
+    inc, imp = _late(incident, impact, 40)
+    result = plan_recovery(inc, snapshot, imp)
+    assert result.no_feasible_plan  # only 25 chairs can arrive in time from confirmed sources
+    combo = next(p for p in result.plans if len(p.actions) == 2)
+    assert combo.actions[0].parameters["supplier_id"] == "S-02"
+    assert combo.actions[0].parameters["quantity"] == 25
+    assert combo.actions[1].parameters["quantity"] == 15  # Maju only rushes the rest
+    assert combo.validation.status == NEEDS
+    assert failed_codes(combo.validation) == set()
+    qty = next(c for c in combo.validation.checks if c.code.value == "QUANTITY_SUFFICIENT")
+    assert qty.detail.startswith("30 + 40 = 70 meets 70")
+
+
+def test_no_partial_expedite_plan_in_demo(snapshot, incident, impact):
+    # Cahaya alone covers the demo gap, so the extra template must stay quiet.
+    assert len(plan_recovery(incident, snapshot, impact).plans) == 3

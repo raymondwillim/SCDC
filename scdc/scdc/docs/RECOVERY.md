@@ -5,7 +5,7 @@ Module: `backend/scdc/recovery/` · Owner: Person 4 · Follows CONTRACTS.md v0.1
 ```
 cd backend
 pip install -e ".[dev]"            # or: pip install pydantic pytest
-python -m pytest tests/recovery -q # 32 tests
+python -m pytest tests/recovery -q # 37 tests
 python -m scdc.recovery.demo       # demo scenario, readable
 python -m scdc.recovery.demo --json > ../fixtures/demo/recovery_output.json   # mock data for P1/P5
 ```
@@ -107,6 +107,8 @@ Templates (in output order). Each one only uses recorded entities and numbers:
    quantity = shortfall, order today, arrival = today + lead time. Offers recorded with 0 units are skipped.
    Slow or unconfirmed offers are still generated, so the owner can see why they were rejected.
 3. **combination**: spare + confirmed in-time offers, cheapest first. Only when no single source covers the shortfall.
+3b. **partial supply + expedite**: when even combined in-time stock is not enough, take all of it and ask the
+   disrupted supplier to rush only the remaining units (e.g. 25 from Cahaya + 15 from Maju). Always `needs_confirmation`.
 4. **reschedule_job**: an affected job whose commitments are all reschedulable and whose quantity covers
    the shortfall, moved to the first day within 7 days that has room.
 5. **contact_supplier** (expedite): ask the disrupted supplier to deliver the late units the day before the need date.
@@ -134,6 +136,9 @@ Status rule: any `fail` → `infeasible`. Otherwise any `unresolved` → `needs_
 | DEPENDENCY_ORDER_OK | order / new / requested date in the past, arrival before order | — |
 | COMMITMENT_RESCHEDULABLE | moving a job with a non-reschedulable commitment | job has no commitment recorded |
 | FACTS_KNOWN | action parameters malformed | any plan assumption, unverified on-hand count, stale data, impact mismatch |
+
+Simulated supply is capped at what the records say exists: ordering 40 from a supplier with 25, or using
+20 spare when 10 exist, counts 25 / 10 in the quantity check, so the reported shortfall is the real one.
 
 `QUANTITY_SUFFICIENT` and `DEADLINE_MET` are separate so the owner sees "too few" (edit 20 → 10) apart
 from "too late" (Delima, 3-day lead time).
