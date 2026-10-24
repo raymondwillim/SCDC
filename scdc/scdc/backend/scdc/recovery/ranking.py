@@ -7,14 +7,18 @@ plans are never ranked.
 
 Score = sum(weight_i * factor_i) / sum(weight_i), every factor in [0, 1]:
 
-  protection   affected commitments still met on their original date
+  protection   affected commitments still fully met on their original date
                / affected commitments                       (from the impact result)
-  deadlines    affected jobs kept on their original date / affected jobs
+  deadlines    affected jobs kept on their original date with their full
+               quantity / affected jobs  (moved or reduced jobs do not count)
   cost         1 for the cheapest known cost among compared plans, 0 for the
                most expensive, linear in between; 0 when cost is unknown
                (unknown cost is never treated as cheap)
   simplicity   1 / number of actions (fewer operational changes)
-  certainty    1 - min(1, unresolved assumptions / 3)
+  certainty    mean of (1 - min(1, unresolved assumptions / 3)) and
+               (1 - share of the shortfall that rests on unconfirmed units:
+               supplier rush requests and unverified spare stock), so
+               "rent 25 + ask for 15" beats "ask for all 40"
 
 Ties: lower known cost, then fewer actions, then plan id.
 """
@@ -39,8 +43,8 @@ class RankingWeights:
     protection: float = 0.35
     deadlines: float = 0.25
     cost: float = 0.20
-    simplicity: float = 0.10
-    certainty: float = 0.10
+    certainty: float = 0.15
+    simplicity: float = 0.05
 
     def as_dict(self) -> dict[str, float]:
         return dict(self.__dict__)
@@ -76,16 +80,46 @@ def _moved_jobs(plan: RecoveryPlan) -> set[str]:
     }
 
 
+def _reduced_jobs(plan: RecoveryPlan, requirements: dict[tuple[str, str], int]) -> set[str]:
+    """Jobs a plan leaves with less than their recorded requirement."""
+    out: set[str] = set()
+    for a in plan.actions:
+        p = a.parameters
+        if a.action_type == ActionType.split_allocation:
+            for alloc in p.get("allocations", []) or []:
+                need = requirements.get((alloc.get("job_id"), p.get("resource_id")))
+                if need is not None and isinstance(alloc.get("quantity"), int) and alloc["quantity"] < need:
+                    out.add(alloc["job_id"])
+        elif a.action_type == ActionType.reallocate_resource and isinstance(p.get("from_job_id"), str):
+            out.add(p["from_job_id"])
+    return out
+
+
+def _unconfirmed_units(plan: RecoveryPlan, shortfall: int) -> int:
+    units = 0
+    for a in plan.actions:
+        q = a.parameters.get("quantity")
+        if a.action_type == ActionType.contact_supplier:
+            units += q if isinstance(q, int) else shortfall  # a full rush request when unspecified
+        elif a.action_type == ActionType.use_spare_inventory and isinstance(q, int):
+            units += q
+    return units
+
+
 def score_plans(
     plans: list[RecoveryPlan],
     impact: ImpactResult | None = None,
     commitment_jobs: dict[str, str] | None = None,
     weights: RankingWeights = RankingWeights(),
+    requirements: dict[tuple[str, str], int] | None = None,
 ) -> list[PlanScore]:
-    """``commitment_jobs`` maps commitment id -> job id (from the snapshot)."""
+    """``commitment_jobs`` maps commitment id -> job id and ``requirements``
+    maps (job id, resource id) -> required quantity, both from the snapshot."""
     jobs = _affected(impact, EntityType.job)
     commitments = _affected(impact, EntityType.commitment)
     commitment_jobs = commitment_jobs or {}
+    requirements = requirements or {}
+    shortfall = max((s.shortfall for s in impact.resource_shortfalls), default=0) if impact else 0
 
     known_costs = [
         p.estimated_cost.amount
@@ -105,7 +139,7 @@ def score_plans(
             scores.append(PlanScore(p.id, status, None, False))
             continue
 
-        moved = _moved_jobs(p)
+        moved = _moved_jobs(p) | _reduced_jobs(p, requirements)
         notes = []
         f: dict[str, float] = {}
         f["protection"] = (
@@ -122,7 +156,12 @@ def score_plans(
         else:
             f["cost"] = float((hi - p.estimated_cost.amount) / (hi - lo))
         f["simplicity"] = 1.0 / len(p.actions)
-        f["certainty"] = 1.0 - min(1.0, len(p.validation.unresolved_assumptions) / 3)
+        open_facts = 1.0 - min(1.0, len(p.validation.unresolved_assumptions) / 3)
+        if shortfall:
+            relied = min(1.0, _unconfirmed_units(p, shortfall) / shortfall)
+            f["certainty"] = (open_facts + (1.0 - relied)) / 2
+        else:
+            f["certainty"] = open_facts
         score = round(sum(w[k] * f[k] for k in w) / total_w, 4)
         scores.append(
             PlanScore(p.id, status, score, status == ValidationStatus.needs_confirmation, f, notes)
@@ -135,9 +174,10 @@ def rank_plans(
     impact: ImpactResult | None = None,
     commitment_jobs: dict[str, str] | None = None,
     weights: RankingWeights = RankingWeights(),
+    requirements: dict[tuple[str, str], int] | None = None,
 ) -> list[RecoveryPlan]:
     """Contract §5 entry point. Returns copies ordered feasible > needs_confirmation > infeasible."""
-    ranked, _ = rank_with_report(plans, impact, commitment_jobs, weights)
+    ranked, _ = rank_with_report(plans, impact, commitment_jobs, weights, requirements)
     return ranked
 
 
@@ -146,8 +186,9 @@ def rank_with_report(
     impact: ImpactResult | None = None,
     commitment_jobs: dict[str, str] | None = None,
     weights: RankingWeights = RankingWeights(),
+    requirements: dict[tuple[str, str], int] | None = None,
 ) -> tuple[list[RecoveryPlan], list[PlanScore]]:
-    scores = {s.plan_id: s for s in score_plans(plans, impact, commitment_jobs, weights)}
+    scores = {s.plan_id: s for s in score_plans(plans, impact, commitment_jobs, weights, requirements)}
     order = {ValidationStatus.feasible: 0, ValidationStatus.needs_confirmation: 1, ValidationStatus.infeasible: 2}
 
     def key(p: RecoveryPlan):

@@ -203,9 +203,15 @@ def test_nothing_recorded_at_all(make_snapshot, incident, impact):
     # Reported on the event morning: no alternative offers, and too late to ask for an expedite.
     late_incident = incident.model_copy(update={"reported_at": datetime(2026, 10, 22, 7, 0, tzinfo=MYT)})
     result = plan_recovery(late_incident, make_snapshot(strip), impact)
-    assert result.plans == []
     assert result.no_feasible_plan
-    assert "No recorded option" in result.next_steps()[0]
+    # The only option left: keep the 50 chairs on hand for the wedding (high priority).
+    assert len(result.plans) == 1
+    only = result.plans[0]
+    assert only.actions[0].action_type.value == "split_allocation"
+    assert only.actions[0].parameters["allocations"] == [
+        {"job_id": "J-01", "quantity": 50}, {"job_id": "J-02", "quantity": 0}]
+    assert only.validation.status == NEEDS
+    assert any("accepts 0 of 20" in step for step in result.next_steps())
 
 
 # ============================================================================ editing
@@ -409,7 +415,8 @@ def test_partial_supply_plus_expedite_when_nobody_has_enough(snapshot, incident,
     inc, imp = _late(incident, impact, 40)
     result = plan_recovery(inc, snapshot, imp)
     assert result.no_feasible_plan  # only 25 chairs can arrive in time from confirmed sources
-    combo = next(p for p in result.plans if len(p.actions) == 2)
+    combo = next(p for p in result.plans if [a.action_type.value for a in p.actions]
+                 == ["source_alternative_supplier", "contact_supplier"])
     assert combo.actions[0].parameters["supplier_id"] == "S-02"
     assert combo.actions[0].parameters["quantity"] == 25
     assert combo.actions[1].parameters["quantity"] == 15  # Maju only rushes the rest
@@ -422,3 +429,49 @@ def test_partial_supply_plus_expedite_when_nobody_has_enough(snapshot, incident,
 def test_no_partial_expedite_plan_in_demo(snapshot, incident, impact):
     # Cahaya alone covers the demo gap, so the extra template must stay quiet.
     assert len(plan_recovery(incident, snapshot, impact).plans) == 3
+
+
+# ============================================================================ re-check fixes (24 Oct)
+
+
+def test_demo_lists_each_confirmation_once(snapshot, incident, impact, expected_plans):
+    rp3 = next(p for p in plan_recovery(incident, snapshot, impact).plans if p.id == "RP-003")
+    exp = next(p for p in expected_plans["plans"] if p["id"] == "RP-003")
+    assert rp3.validation.unresolved_assumptions == exp["validation"]["unresolved_assumptions"]
+
+
+def test_old_supplier_confirmation_must_be_reconfirmed(make_snapshot, incident, impact):
+    snap = make_snapshot(lambda s: by_id(s["supplier_offerings"], "SO-02").update(
+        confirmed_at="2026-09-01T09:00:00+08:00"))
+    v = validate_plan(plan(rent("S-02", 20)), snap, impact, incident)
+    assert v.status == NEEDS
+    assert any("re-confirm" in u for u in v.unresolved_assumptions)
+
+
+def test_fresh_confirmation_still_passes(make_snapshot, incident, impact):
+    snap = make_snapshot(lambda s: by_id(s["supplier_offerings"], "SO-02").update(
+        confirmed_at="2026-10-18T09:00:00+08:00"))  # 2 days before as_of
+    assert validate_plan(plan(rent("S-02", 20)), snap, impact, incident).status == FEASIBLE
+
+
+def test_protect_high_priority_event_when_chairs_run_out(snapshot, incident, impact):
+    inc, imp = _late(incident, impact, 40)
+    result = plan_recovery(inc, snapshot, imp)
+    protect = next(p for p in result.plans if p.actions[-1].action_type.value == "split_allocation")
+    rent_part, split = protect.actions
+    assert rent_part.parameters["supplier_id"] == "S-02" and rent_part.parameters["quantity"] == 25
+    # 30 on hand + 25 rented = 55: wedding (high) gets all 50, seminar (medium) gets 5 of 20.
+    assert split.parameters["allocations"] == [{"job_id": "J-01", "quantity": 50}, {"job_id": "J-02", "quantity": 5}]
+    assert protect.validation.status == NEEDS
+    assert failed_codes(protect.validation) == set()
+    assert "J-02" in protect.validation.unresolved_assumptions[0]
+    assert protect.estimated_cost.amount == Decimal("100.00")
+
+
+def test_relying_on_fewer_unconfirmed_chairs_ranks_higher(snapshot, incident, impact):
+    inc, imp = _late(incident, impact, 40)
+    pending = [p for p in plan_recovery(inc, snapshot, imp).plans if p.validation.status == NEEDS]
+    order = [[a.action_type.value for a in p.actions] for p in pending]
+    rent_plus_rush = order.index(["source_alternative_supplier", "contact_supplier"])
+    rush_all = order.index(["contact_supplier"])
+    assert rent_plus_rush < rush_all  # Maju asked for 15, not 40

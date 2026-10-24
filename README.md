@@ -18,7 +18,7 @@ Supplier delay → Structured incident → Impact analysis → Recovery plans
 | Frontend | P1 | `frontend/` | `p1-frontend` | — |
 | Backend / API / database | P2 | `backend/scdc/api/` | `p2-backend` | — |
 | Impact analysis | P3 | `backend/scdc/impact/` | `p3-impact` | — |
-| Recovery planning, validation, ranking | P4 | `backend/scdc/recovery/` | `p4-recovery` | ✅ done, 37 tests |
+| Recovery planning, validation, ranking | P4 | `backend/scdc/recovery/` | `p4-recovery` | ✅ done, 42 tests |
 | AI extraction and explanation | P5 | `backend/scdc/ai/` | `p5-ai` | — |
 
 ## Run

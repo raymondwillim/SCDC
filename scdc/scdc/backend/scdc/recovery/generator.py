@@ -17,11 +17,16 @@ Templates, in output order:
   4. reschedule_job             move one affected job whose commitments are all
                                 reschedulable to the first later day that has room
   5. contact_supplier           ask the disrupted supplier to expedite the delayed units
+  6. protect priority           confirmed in-time supply cannot cover everyone: use it all
+                                and give jobs their full need in priority order
+                                (critical > high > medium > low); lower-priority jobs get
+                                what is left, which needs the customer's agreement
 
-reallocate_resource and split_allocation are not emitted by the rules: the
-records hold no minimum acceptable quantity or partial-fulfilment permission,
-so any such plan would rest on an invented fact. They are still accepted from
-AI suggestions and user edits and validated like everything else.
+reallocate_resource is not emitted by the rules, and split_allocation only by
+template 6: the records hold no minimum acceptable quantity or partial-
+fulfilment permission, so a reduced allocation is always shown as needing the
+customer's agreement, never as feasible. Both are accepted from AI suggestions
+and user edits and validated like everything else.
 """
 
 from __future__ import annotations
@@ -399,6 +404,58 @@ def _expedite(state: BusinessState, incident: NormalizedIncident, pr: RecoveryPr
     ]
 
 
+PRIORITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+
+def _protect_priority(state: BusinessState, incident: NormalizedIncident, pr: RecoveryProblem) -> list[Candidate]:
+    if len(pr.dates) != 1:
+        return []  # one shared day keeps the allocation unambiguous
+    day = pr.dates[0]
+    offers = [src for src in _in_time_sources(state, incident, pr) if src[0] == "offer"]  # confirmed only
+    if _single_source_covers(offers, pr.shortfall):
+        return []
+    actions, _, parts, taken = _take(state, pr, offers, pr.shortfall)
+    if taken >= pr.shortfall:
+        return []  # confirmed supply covers everyone; template 3 handles it
+
+    r = state.resource(pr.resource_id)
+    pool = state.pool(pr.resource_id, day) + taken
+    demands = sorted(
+        (d for d in state.demands_for(pr.resource_id) if d.date == day),
+        key=lambda d: (PRIORITY_ORDER.get(state.job(d.job_id).priority, 9), d.job_id),
+    )
+    allocations, protected, reduced = [], [], []
+    for d in demands:
+        give = min(d.required, max(0, pool))
+        pool -= give
+        allocations.append({"job_id": d.job_id, "quantity": give})
+        (protected if give == d.required else reduced).append((d, give))
+    if not protected or not reduced:
+        return []
+
+    actions.append(
+        (
+            ActionType.split_allocation,
+            TargetEntity(entity_type=EntityType.resource, entity_id=r.id),
+            {"resource_id": r.id, "allocations": allocations},
+        )
+    )
+    names = " and ".join(state.job(d.job_id).name for d, _ in protected)
+    cut = "; ".join(f"{d.job_id} gets {g} of {d.required}" for d, g in reduced)
+    via = f" using {', '.join(parts)}" if parts else " with chairs already on hand"
+    return [
+        Candidate(
+            summary=f"Fully protect {names}{via}; {cut} {_plural(r.unit, 2)}.",
+            actions=actions,
+            assumptions=[
+                f"The customer of {d.job_id} ({state.job(d.job_id).name}) accepts {g} of {d.required} "
+                f"{_plural(r.unit, d.required)}."
+                for d, g in reduced
+            ],
+        )
+    ]
+
+
 # ============================================================================ stage 3: normalize
 
 
@@ -442,6 +499,7 @@ def generate_candidates(
         candidates += _partial_plus_expedite(state, incident, pr)
         candidates += _reschedule(state, pr)
         candidates += _expedite(state, incident, pr)
+        candidates += _protect_priority(state, incident, pr)
 
     ai_candidates, warnings = collect_suggestions(suggester or NullSuggester(), incident, snapshot, impact, problems)
     candidates += ai_candidates

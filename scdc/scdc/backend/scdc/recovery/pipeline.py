@@ -60,6 +60,14 @@ def _commitment_jobs(snapshot: BusinessSnapshot) -> dict[str, str]:
     return {c.id: c.job_id for c in snapshot.commitments}
 
 
+def _requirements(snapshot: BusinessSnapshot) -> dict[tuple[str, str], int]:
+    return {
+        (d.target_id, d.source_id): d.required_quantity
+        for d in snapshot.dependencies
+        if d.dependency_type.value == "requires" and d.required_quantity is not None
+    }
+
+
 def revalidate(
     plan: RecoveryPlan,
     snapshot: BusinessSnapshot,
@@ -86,7 +94,7 @@ def plan_recovery(
 ) -> RecoveryResult:
     gen = generate_candidates(incident, snapshot, impact, ids=ids, suggester=suggester)
     validated = [revalidate(p, snapshot, impact, incident, validated_at) for p in gen.plans]
-    ranked, scores = rank_with_report(validated, impact, _commitment_jobs(snapshot), weights)
+    ranked, scores = rank_with_report(validated, impact, _commitment_jobs(snapshot), weights, _requirements(snapshot))
     by_id = {s.plan_id: s for s in scores}
     explanations = [explain_plan(p, snapshot, by_id[p.id]) for p in ranked]
     return RecoveryResult(gen.problems, ranked, scores, explanations, gen.warnings)

@@ -170,12 +170,11 @@
           {
             "code": "FACTS_KNOWN",
             "result": "unresolved",
-            "detail": "Depends on 2 unconfirmed fact(s).",
+            "detail": "Depends on 1 unconfirmed fact(s).",
             "evidence_ids": []
           }
         ],
         "unresolved_assumptions": [
-          "S-01 has not confirmed it can deliver 20 by 2026-10-21.",
           "S-01 can expedite the remaining 20 chairs to 2026-10-21."
         ],
         "validated_at": "2026-10-20T10:15:00+08:00"
@@ -365,7 +364,7 @@
         "QUANTITY_SUFFICIENT: DEP-03, DEP-04, R-01",
         "SUPPLIER_AVAILABLE: SO-02"
       ],
-      "ranking_reason": "Rank 1: score 1.00 = protection 1.00x0.35, deadlines 1.00x0.25, cost 1.00x0.20, simplicity 1.00x0.10, certainty 1.00x0.10.",
+      "ranking_reason": "Rank 1: score 1.00 = protection 1.00x0.35, deadlines 1.00x0.25, cost 1.00x0.20, simplicity 1.00x0.05, certainty 1.00x0.15.",
       "generated_by": "template"
     },
     {
@@ -424,7 +423,7 @@
         {
           "code": "FACTS_KNOWN",
           "result": "unresolved",
-          "detail": "Depends on 2 unconfirmed fact(s).",
+          "detail": "Depends on 1 unconfirmed fact(s).",
           "evidence_ids": []
         }
       ],
@@ -437,7 +436,6 @@
         "Not validated until the confirmations below are obtained."
       ],
       "required_confirmations": [
-        "S-01 has not confirmed it can deliver 20 by 2026-10-21.",
         "S-01 can expedite the remaining 20 chairs to 2026-10-21."
       ],
       "assumptions": [
@@ -448,7 +446,7 @@
         "QUANTITY_SUFFICIENT: DEP-03, DEP-04, R-01",
         "SUPPLIER_AVAILABLE: SO-01"
       ],
-      "ranking_reason": "Not ranked until confirmed (provisional): score 0.73 = protection 1.00x0.35, deadlines 1.00x0.25, cost 0.00x0.20, simplicity 1.00x0.10, certainty 0.33x0.10; cost unknown, scored as 0 for cost.",
+      "ranking_reason": "Not ranked until confirmed (provisional): score 0.70 = protection 1.00x0.35, deadlines 1.00x0.25, cost 0.00x0.20, simplicity 1.00x0.05, certainty 0.33x0.15; cost unknown, scored as 0 for cost.",
       "generated_by": "template"
     },
     {

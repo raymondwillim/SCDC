@@ -65,6 +65,9 @@ from .contracts import (
 )
 from .state import Arrival, BusinessState
 
+# A supplier's "confirmed" availability older than this must be re-confirmed.
+MAX_CONFIRMATION_AGE = timedelta(hours=72)
+
 PASS, FAIL, UNRESOLVED = CheckResult.pass_, CheckResult.fail, CheckResult.unresolved
 
 
@@ -83,10 +86,19 @@ class _Run:
     spare_use: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     order_problems: int = 0
 
-    def add(self, code: CheckCode, result: CheckResult, detail: str, evidence: list[str] | None = None):
+    def add(
+        self,
+        code: CheckCode,
+        result: CheckResult,
+        detail: str,
+        evidence: list[str] | None = None,
+        need_text: str | None = None,
+    ):
+        """``need_text`` overrides what is listed as a required confirmation, so the
+        same fact worded by the generator (as a plan assumption) is listed once."""
         self.checks.append(ValidationCheck(code=code, result=result, detail=detail, evidence_ids=evidence or []))
         if result == UNRESOLVED:
-            self.need(detail)
+            self.need(need_text or detail)
 
     def need(self, text: str):
         if text not in self.unresolved:
@@ -272,6 +284,15 @@ def _source_alternative(run: _Run, action: RecoveryAction, p: SourceAlternativeS
                 f"{supplier.name} ({supplier.id}) has not confirmed {promised} available.",
                 [offer.id],
             )
+        elif offer.confirmed_at is not None and run.state.snapshot.as_of - offer.confirmed_at > MAX_CONFIRMATION_AGE:
+            age = run.state.snapshot.as_of - offer.confirmed_at
+            run.add(
+                CheckCode.SUPPLIER_AVAILABLE,
+                UNRESOLVED,
+                f"{supplier.id} confirmed {offer.available_quantity} available {age.days} day(s) ago "
+                f"({offer.confirmed_at.date()}); re-confirm before relying on it.",
+                [offer.id],
+            )
         else:
             run.add(
                 CheckCode.SUPPLIER_AVAILABLE,
@@ -411,11 +432,22 @@ def _contact_supplier(run: _Run, action: RecoveryAction, p: ContactSupplier) -> 
     )
     if is_expedite:
         qty = min(p.quantity or delayed.quantity, delayed.quantity)
+        unit = run.state.resource(delayed.resource_id).unit
+        late_units = unit if delayed.quantity == 1 else f"{unit}s"
+        # Same wording the generator uses for the plan assumption.
+        if qty == delayed.quantity:
+            need = f"{supplier.id} can expedite the remaining {qty} {late_units} to {p.requested_date.isoformat()}."
+        else:
+            need = (
+                f"{supplier.id} can deliver {qty} of the remaining {delayed.quantity} {late_units} "
+                f"by {p.requested_date.isoformat()}."
+            )
         run.add(
             CheckCode.SUPPLIER_AVAILABLE,
             UNRESOLVED,
             f"{supplier.id} has not confirmed it can deliver {qty} by {p.requested_date}.",
             offer_ids,
+            need_text=need,
         )
         # Simulate the outcome *if* the supplier agrees, so a request that
         # would not help even when granted is still caught as infeasible.
